@@ -1,8 +1,32 @@
 import os
 import regex as re
+from cs336_basics.pretokenization_example import find_chunk_boundaries
+import multiprocessing as mp
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+_SINGLE_BYTES = tuple(bytes([i]) for i in range(256))
+PARALLEL_FILE_SIZE = 50 * 1024 * 1024 # 50MB
 
+## 并行优化 worker 函数
+def _pre_tokenize_chunk(args):
+    input_path, start, end, special_tokens = args
+    with open(input_path, "rb") as f:
+        f.seek(start)
+        text = f.read(end-start).decode("utf-8", errors="ignore")
+
+        pattern = "|".join(re.escape(t) for t in special_tokens)
+
+        pieces = re.split(pattern, text)
+
+        corpus = {}
+        for piece in pieces:
+            for m in re.finditer(PAT, piece):
+                token = m.group()
+                enc = token.encode("utf-8")
+                key = tuple(_SINGLE_BYTES[b] for b in enc)
+                corpus[key] = corpus.get(key, 0) + 1
+    
+    return corpus
 
 def train_bpe(input_path: str | os.PathLike, 
               vocab_size: int, 
@@ -30,32 +54,33 @@ def train_bpe(input_path: str | os.PathLike,
                 Merges are ordered by order of creation.
     """
 
-    with open(input_path, encoding="utf-8") as f:
-        text = f.read()
+    file_size = os.path.getsize(input_path)
+    offset_list = find_chunk_boundaries(open(input_path, "rb"), os.cpu_count(), b"<|endoftext|>")
+    corpus = {}
+    tasks = []
+    for i in range(len(offset_list) - 1):
+        tasks.append((input_path, offset_list[i], offset_list[i+1], special_tokens))
 
-        pattern = "|".join(re.escape(t) for t in special_tokens)
+    if file_size < PARALLEL_FILE_SIZE:
+        ## 文件大小小于阈值，不进行并行
+        corpus = _pre_tokenize_chunk((input_path, 0, file_size, special_tokens))
+    else:
+        with mp.Pool(processes=os.cpu_count()) as pool:
+            partials = pool.map(_pre_tokenize_chunk, tasks)
+        for partial in partials:
+            for key, freq in partial.items():
+                corpus[key] = corpus.get(key, 0) + freq
 
-        pieces = re.split(pattern, text)
+    pair_counts = {}
+    ## 建立一个倒排索引
+    pair_to_keys = {}
 
-        corpus = {}
-        for piece in pieces:
-            for m in re.finditer(PAT, piece):
-                token = m.group()
-                enc = token.encode("utf-8")
-                key = tuple(bytes([b]) for b in enc)
-                corpus[key] = corpus.get(key, 0) + 1
+    for tup, freq in corpus.items():
 
-
-        pair_counts = {}
-        ## 建立一个倒排索引
-        pair_to_keys = {}
-
-        for tup, freq in corpus.items():
-
-            for i in range(len(tup) - 1):
-                pair = (tup[i], tup[i+1])
-                pair_counts[pair] = pair_counts.get(pair, 0) + freq
-                pair_to_keys.setdefault(pair, set()).add(tup)
+        for i in range(len(tup) - 1):
+            pair = (tup[i], tup[i+1])
+            pair_counts[pair] = pair_counts.get(pair, 0) + freq
+            pair_to_keys.setdefault(pair, set()).add(tup)
 
     merges = []
 
@@ -107,7 +132,7 @@ def train_bpe(input_path: str | os.PathLike,
 
     token_id = 0
     for i in range(256):
-        vocab[token_id] = bytes([i])
+        vocab[token_id] = _SINGLE_BYTES[i]
         token_id += 1
 
     for merge in merges:
@@ -127,6 +152,6 @@ def train_bpe(input_path: str | os.PathLike,
 if __name__ == "__main__":
     import time
     start = time.perf_counter()
-    train_bpe('tests/fixtures/tinystories_sample_5M.txt', 1000, ['<|endoftext|>'])
+    train_bpe('data/TinyStoriesV2-GPT4-train.txt', 10000, ['<|endoftext|>'])
     end = time.perf_counter()
     print(end-start)
