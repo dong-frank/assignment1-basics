@@ -3,6 +3,7 @@ import regex as re
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
+
 def train_bpe(input_path: str | os.PathLike, 
               vocab_size: int, 
               special_tokens: list[str]
@@ -44,9 +45,6 @@ def train_bpe(input_path: str | os.PathLike,
                 key = tuple(bytes([b]) for b in enc)
                 corpus[key] = corpus.get(key, 0) + 1
 
-    merges = []
-
-    while 256 + len(merges) + len(special_tokens) < vocab_size:
 
         pair_counts = {}
 
@@ -56,10 +54,12 @@ def train_bpe(input_path: str | os.PathLike,
                 pair = (tup[i], tup[i+1])
                 pair_counts[pair] = pair_counts.get(pair, 0) + freq
 
+    merges = []
+
+    while 256 + len(merges) + len(special_tokens) < vocab_size:
 
         if pair_counts == {}:
             break
-
 
         best = max(pair_counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
 
@@ -67,10 +67,14 @@ def train_bpe(input_path: str | os.PathLike,
         for tup, freq in corpus.items():
             i = 0
             result = []
+
+            changed = False
             while i < len(tup):
                 if i + 1 < len(tup) and (tup[i], tup[i+1]) == best:
                     result.append(tup[i] + tup[i + 1])
                     i += 2
+                    changed = True
+
                 else:
                     result.append(tup[i])
                     i += 1
@@ -79,6 +83,17 @@ def train_bpe(input_path: str | os.PathLike,
 
             new_corpus[key] = new_corpus.get(key, 0) + freq
 
+            if changed:
+                for i in range(len(tup) - 1):
+                    pair = (tup[i], tup[i+1])
+                    pair_counts[pair] = pair_counts.get(pair, 0) - freq
+                    if pair_counts[pair] <= 0:
+                        del pair_counts[pair]
+
+                new_tup = key
+                for i in range(len(new_tup) - 1):
+                    pair = (new_tup[i], new_tup[i+1])
+                    pair_counts[pair] = pair_counts.get(pair, 0) + freq
 
         corpus = new_corpus
         merges.append(best)
@@ -104,4 +119,8 @@ def train_bpe(input_path: str | os.PathLike,
         
 
 if __name__ == "__main__":
-    train_bpe('tests/fixtures/tinystories_sample_5M.txt', 500, ['<|endoftext|>'])
+    import time
+    start = time.perf_counter()
+    train_bpe('tests/fixtures/corpus.en', 500, ['<|endoftext|>'])
+    end = time.perf_counter()
+    print(end-start)
