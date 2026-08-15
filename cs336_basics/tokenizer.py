@@ -47,12 +47,15 @@ def train_bpe(input_path: str | os.PathLike,
 
 
         pair_counts = {}
+        ## 建立一个倒排索引
+        pair_to_keys = {}
 
         for tup, freq in corpus.items():
 
             for i in range(len(tup) - 1):
                 pair = (tup[i], tup[i+1])
                 pair_counts[pair] = pair_counts.get(pair, 0) + freq
+                pair_to_keys.setdefault(pair, set()).add(tup)
 
     merges = []
 
@@ -63,39 +66,41 @@ def train_bpe(input_path: str | os.PathLike,
 
         best = max(pair_counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
 
-        new_corpus = {}
-        for tup, freq in corpus.items():
+        ## 利用倒排索引直接找需要发生merge 的tuple
+        affected = list(pair_to_keys.get(best, ()))
+
+        for key in affected:
+            freq = corpus.pop(key)
             i = 0
             result = []
-
             changed = False
-            while i < len(tup):
-                if i + 1 < len(tup) and (tup[i], tup[i+1]) == best:
-                    result.append(tup[i] + tup[i + 1])
+            while i < len(key):
+                if i + 1 < len(key) and (key[i], key[i+1]) == best:
+                    result.append(key[i] + key[i + 1])
                     i += 2
                     changed = True
 
                 else:
-                    result.append(tup[i])
+                    result.append(key[i])
                     i += 1
             
-            key = tuple(result)
-
-            new_corpus[key] = new_corpus.get(key, 0) + freq
+            new_key = tuple(result)
+            corpus[new_key] = freq
 
             if changed:
-                for i in range(len(tup) - 1):
-                    pair = (tup[i], tup[i+1])
+                for i in range(len(key) - 1):
+                    pair = (key[i], key[i+1])
                     pair_counts[pair] = pair_counts.get(pair, 0) - freq
                     if pair_counts[pair] <= 0:
                         del pair_counts[pair]
+                    pair_to_keys[pair].discard(key)
 
-                new_tup = key
-                for i in range(len(new_tup) - 1):
-                    pair = (new_tup[i], new_tup[i+1])
+                for i in range(len(new_key) - 1):
+                    pair = (new_key[i], new_key[i+1])
                     pair_counts[pair] = pair_counts.get(pair, 0) + freq
+                    pair_to_keys.setdefault(pair, set()).add(new_key)
 
-        corpus = new_corpus
+
         merges.append(best)
 
     vocab = {}
@@ -116,11 +121,12 @@ def train_bpe(input_path: str | os.PathLike,
     return vocab, merges
 
         
-        
+
+    
 
 if __name__ == "__main__":
     import time
     start = time.perf_counter()
-    train_bpe('tests/fixtures/corpus.en', 500, ['<|endoftext|>'])
+    train_bpe('tests/fixtures/tinystories_sample_5M.txt', 1000, ['<|endoftext|>'])
     end = time.perf_counter()
     print(end-start)
