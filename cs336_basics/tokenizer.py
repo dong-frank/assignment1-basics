@@ -2,6 +2,9 @@ import os
 import regex as re
 from cs336_basics.pretokenization_example import find_chunk_boundaries
 import multiprocessing as mp
+import json
+from cs336_basics.utils import gpt2_bytes_to_unicode
+import time
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 _SINGLE_BYTES = tuple(bytes([i]) for i in range(256))
@@ -145,13 +148,65 @@ def train_bpe(input_path: str | os.PathLike,
 
     return vocab, merges
 
-        
+def save_vocab_merges(vocab, merges, vocab_path, merges_path):
 
+    char_map = gpt2_bytes_to_unicode()
+
+    vocab_saved = {}
+    for token_id, token_bytes in vocab.items():
+        token = "".join(char_map[b] for b in token_bytes)
+        vocab_saved[token] = token_id
+
+    json.dump(vocab_saved, open(vocab_path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+
+    with open(merges_path, "w", encoding="utf-8") as f:
+        for merge in merges:
+            f.write("".join(char_map[b] for b in merge[0]) + " " + "".join(char_map[b] for b in merge[1]) + "\n")
+
+def load_vocab_merges(vocab_path, merges_path):
+    rev_map = {v: k for k, v in gpt2_bytes_to_unicode().items()}
+
+    vocab_saved = json.load(open(vocab_path, encoding="utf-8"))
+    vocab = {}
+
+    for token, token_id in vocab_saved.items():
+        token_bytes = bytes([rev_map[c] for c in token])
+        vocab[token_id] = token_bytes
     
+    merges = []
+    with open(merges_path, "r", encoding="utf-8") as f:
+        for line in f:
+            cleaned = line.rstrip()
+            if not cleaned:
+                continue
+            tok1_str, tok2_str = cleaned.split()
+            merge = (
+                bytes([rev_map[c] for c in tok1_str]),
+                bytes([rev_map[c] for c in tok2_str])
+            )
+            merges.append(merge)
+
+    return vocab, merges
+
 
 if __name__ == "__main__":
-    import time
     start = time.perf_counter()
-    train_bpe('data/TinyStoriesV2-GPT4-train.txt', 10000, ['<|endoftext|>'])
+    # vocab, merges = train_bpe('data/TinyStoriesV2-GPT4-train.txt', 10000, ['<|endoftext|>'])
+    vocab, merges = train_bpe('tests/fixtures/tinystories_sample_5M.txt', 1000, ['<|endoftext|>'])
+    # vocab, merges = train_bpe('data/owt_train.txt', 32000, ['<|endoftext|>']) ## OOM
     end = time.perf_counter()
+
+    # save_vocab_merges(vocab, merges, "data/TinyStoriesV2-GPT4-train_vocab.json", "data/TinyStoriesV2-GPT4-train_merges.txt")
+    # loaded_vocab, loaded_merges = load_vocab_merges("data/TinyStoriesV2-GPT4-train_vocab.json", "data/TinyStoriesV2-GPT4-train_merges.txt")
+
+    save_vocab_merges(vocab, merges, "data/tinystories_sample_5M_vocab.json", "data/tinystories_sample_5M_merges.txt")
+    loaded_vocab, loaded_merges = load_vocab_merges("data/tinystories_sample_5M_vocab.json", "data/tinystories_sample_5M_merges.txt")
+
+    # save_vocab_merges(vocab, merges, "data/owt_train_vocab.json", "data/owt_train_merges.txt")
+    # loaded_vocab, loaded_merges = load_vocab_merges("data/owt_train_vocab.json", "data/owt_train_merges.txt")
+
+
+
+    assert loaded_vocab == vocab
+    assert loaded_merges == merges
     print(end-start)
