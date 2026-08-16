@@ -6,6 +6,7 @@ import json
 from cs336_basics.utils import gpt2_bytes_to_unicode
 import time
 from collections.abc import Iterator
+import numpy as np
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 _SINGLE_BYTES = tuple(bytes([i]) for i in range(256))
@@ -278,20 +279,40 @@ class Tokenizer:
 if __name__ == "__main__":
     start = time.perf_counter()
     # vocab, merges = train_bpe('data/TinyStoriesV2-GPT4-train.txt', 10000, ['<|endoftext|>'])
-    vocab, merges = train_bpe('tests/fixtures/tinystories_sample_5M.txt', 1000, ['<|endoftext|>'])
+    # vocab, merges = train_bpe('tests/fixtures/tinystories_sample_5M.txt', 1000, ['<|endoftext|>'])
     # vocab, merges = train_bpe('data/owt_train.txt', 32000, ['<|endoftext|>']) ## OOM
-    end = time.perf_counter()
 
     # save_vocab_merges(vocab, merges, "data/TinyStoriesV2-GPT4-train_vocab.json", "data/TinyStoriesV2-GPT4-train_merges.txt")
-    # loaded_vocab, loaded_merges = load_vocab_merges("data/TinyStoriesV2-GPT4-train_vocab.json", "data/TinyStoriesV2-GPT4-train_merges.txt")
+    loaded_vocab, loaded_merges = load_vocab_merges("data/TinyStoriesV2-GPT4-train_vocab.json", "data/TinyStoriesV2-GPT4-train_merges.txt")
 
-    save_vocab_merges(vocab, merges, "data/tinystories_sample_5M_vocab.json", "data/tinystories_sample_5M_merges.txt")
-    loaded_vocab, loaded_merges = load_vocab_merges("data/tinystories_sample_5M_vocab.json", "data/tinystories_sample_5M_merges.txt")
+    # save_vocab_merges(vocab, merges, "data/tinystories_sample_5M_vocab.json", "data/tinystories_sample_5M_merges.txt")
+    # loaded_vocab, loaded_merges = load_vocab_merges("data/tinystories_sample_5M_vocab.json", "data/tinystories_sample_5M_merges.txt")
 
     # save_vocab_merges(vocab, merges, "data/owt_train_vocab.json", "data/owt_train_merges.txt")
     # loaded_vocab, loaded_merges = load_vocab_merges("data/owt_train_vocab.json", "data/owt_train_merges.txt")
 
-    tokenizer = Tokenizer(vocab, merges, ['<|endoftext|>'])
-    print(tokenizer.decode(tokenizer.encode("Hello, how are you?")))
+    tokenizer = Tokenizer.from_files("data/TinyStoriesV2-GPT4-train_vocab.json", "data/TinyStoriesV2-GPT4-train_merges.txt", ['<|endoftext|>'])
 
+    data_path = "data/TinyStoriesV2-GPT4-train.txt"
+    est = os.path.getsize(data_path) // 3 + 1
+    arr = np.empty(est, dtype=np.uint16)
+    count = 0
+
+    with open(data_path, encoding="utf-8") as f:
+        for token_id in tokenizer.encode_iterable(f):
+            if count >= len(arr):
+                # 动态扩容
+                bigger = np.empty(len(arr) * 2, dtype=np.uint16)
+                bigger[:count] = arr[:count]
+                arr = bigger
+            arr[count] = token_id
+            count += 1
+
+    arr = arr[:count]
+    np.save("data/TinyStoriesV2-GPT4-train_ids.npy", arr)
+
+    print(f"总 token 数: {count}")
+    print(f"压缩率: {os.path.getsize(data_path) / count:.2f} bytes/token")
+
+    end = time.perf_counter()
     print(end-start)
