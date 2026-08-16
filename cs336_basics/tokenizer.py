@@ -201,6 +201,9 @@ class Tokenizer:
 
         self._special_tokens_set = set(self.special_tokens)
 
+        # encode 性能优化
+        self._rank = {merge: i for i, merge in enumerate(self.merges)}
+
     @classmethod
     def from_files(cls, vocab_path, merges_path, special_tokens=None):
         vocab, merges = load_vocab_merges(vocab_path, merges_path)
@@ -228,20 +231,25 @@ class Tokenizer:
                 token = m.group()
                 enc = token.encode("utf-8")
                 key = tuple(_SINGLE_BYTES[b] for b in enc)
-    
-                for merge in self.merges:
-                        i = 0
-                        new_key = []
-                        while i < len(key):
-                            if i + 1 < len(key) and (key[i], key[i+1]) == merge:
-                                new_key.append(key[i] + key[i + 1])
-                                i += 2
-            
-                            else:
-                                new_key.append(key[i])
-                                i += 1
-                        
-                        key = tuple(new_key)
+
+                while len(key) > 1:
+                    min_rank = float("inf")
+                    to_merge = None
+                    merge = None
+                    merge_idx = 0
+                    for i in range(len(key) - 1):
+                        pair = (key[i], key[i+1])
+                        rank = self._rank.get(pair, float("inf"))
+                        if rank < min_rank:
+                            to_merge = pair
+                            merge = key[i] + key[i+1]
+                            merge_idx = i
+                            min_rank = rank
+
+                    if to_merge:
+                        key = key[:merge_idx] + (merge,) + key[merge_idx + 2:]
+                    else:
+                        break
 
                 for token in key:
                     token_id = self._rev_vocab[token]
