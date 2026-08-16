@@ -1,4 +1,5 @@
 from functools import lru_cache
+import json
 
 ## copy from tests/common.py
 @lru_cache
@@ -47,3 +48,10 @@ def gpt2_bytes_to_unicode() -> dict[int, str]:
     characters = [chr(n) for n in cs]
     d = dict(zip(bs, characters))
     return d
+
+
+def get_longest_token(vocab_path):
+    with open(vocab_path) as f:
+        vocab = json.load(f)
+        longest_token = max(vocab, key=len)
+    return longest_token
