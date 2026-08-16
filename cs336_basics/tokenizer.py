@@ -5,6 +5,7 @@ import multiprocessing as mp
 import json
 from cs336_basics.utils import gpt2_bytes_to_unicode
 import time
+from collections.abc import Iterator
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 _SINGLE_BYTES = tuple(bytes([i]) for i in range(256))
@@ -157,7 +158,8 @@ def save_vocab_merges(vocab, merges, vocab_path, merges_path):
         token = "".join(char_map[b] for b in token_bytes)
         vocab_saved[token] = token_id
 
-    json.dump(vocab_saved, open(vocab_path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+    with open (vocab_path, "w", encoding="utf-8") as f:
+        json.dump(vocab_saved, f, indent=2, ensure_ascii=False)
 
     with open(merges_path, "w", encoding="utf-8") as f:
         for merge in merges:
@@ -188,6 +190,82 @@ def load_vocab_merges(vocab_path, merges_path):
 
     return vocab, merges
 
+class Tokenizer:
+    def __init__(self, vocab, merges, special_tokens=None):
+        self.vocab = vocab
+        self.merges = merges
+        self.special_tokens = special_tokens or []
+        self._rev_vocab = {}
+        for token_id, token_bytes in self.vocab.items():
+            self._rev_vocab[token_bytes] = token_id
+
+        self._special_tokens_set = set(self.special_tokens)
+
+    @classmethod
+    def from_files(cls, vocab_path, merges_path, special_tokens=None):
+        vocab, merges = load_vocab_merges(vocab_path, merges_path)
+        return cls(vocab, merges, special_tokens)
+
+    def encode(self, text) -> list[int]:
+        result = []
+
+        if self.special_tokens:
+            # 对special tokens 排序，字符串长的排在前面，才能正确把 "<|endoftext|><|endoftext|>" 识别出来
+            # 因为正则表达式是从左到右匹配的，如果 <|endoftext|> 在前，就会匹配为两个token
+            sorted_special_tokens = sorted(self.special_tokens, key=len, reverse=True)
+
+            pattern = "|".join(re.escape(t) for t in sorted_special_tokens)
+            pieces = re.split(f"({pattern})", text)  # 带捕获组的 re.split 把分隔符(special_token)也放进结果
+        else:
+            pieces = [text]
+        
+        for piece in pieces:
+            if piece in self._special_tokens_set:
+                result.append(self._rev_vocab[piece.encode("utf-8")])
+                continue
+            
+            for m in re.finditer(PAT, piece):
+                token = m.group()
+                enc = token.encode("utf-8")
+                key = tuple(_SINGLE_BYTES[b] for b in enc)
+    
+                for merge in self.merges:
+                        i = 0
+                        new_key = []
+                        while i < len(key):
+                            if i + 1 < len(key) and (key[i], key[i+1]) == merge:
+                                new_key.append(key[i] + key[i + 1])
+                                i += 2
+            
+                            else:
+                                new_key.append(key[i])
+                                i += 1
+                        
+                        key = tuple(new_key)
+
+                for token in key:
+                    token_id = self._rev_vocab[token]
+                    result.append(token_id)
+
+        return result
+
+    def encode_iterable(self, iterable) -> Iterator[int]:
+        pendding = ""
+        for line in iterable:
+            text = pendding + line
+            stripped = text.rstrip()    # 去掉尾部空白后的部分
+            pendding = text[len(stripped):] # 被去掉的空白，留着下一行一起处理
+
+            if stripped:
+                yield from self.encode(stripped)
+
+        if pendding:
+            yield from self.encode(pendding)
+
+    def decode(self, ids) -> str:
+        result = b"".join(self.vocab[token_id] for token_id in ids).decode("utf-8", errors="replace")
+        return result
+
 
 if __name__ == "__main__":
     start = time.perf_counter()
@@ -205,8 +283,7 @@ if __name__ == "__main__":
     # save_vocab_merges(vocab, merges, "data/owt_train_vocab.json", "data/owt_train_merges.txt")
     # loaded_vocab, loaded_merges = load_vocab_merges("data/owt_train_vocab.json", "data/owt_train_merges.txt")
 
+    tokenizer = Tokenizer(vocab, merges, ['<|endoftext|>'])
+    print(tokenizer.decode(tokenizer.encode("Hello, how are you?")))
 
-
-    assert loaded_vocab == vocab
-    assert loaded_merges == merges
     print(end-start)
