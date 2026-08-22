@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from einops import einsum, rearrange
 import math
-from cs336_basics.nn_utils import silu
+from cs336_basics.nn_utils import silu, scaled_dot_product_attention
 
 class Linear(nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
@@ -110,5 +110,64 @@ class RotaryPositionalEmbedding(nn.Module):
         return x
 
 
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, rope=None, device=None, dtype=None):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+
+        if d_model % num_heads != 0:
+            raise ValueError
+
+        self.d_v = self.d_k
+
+        self.q_proj = Linear(d_model, d_model, device=device, dtype=dtype)  ## h * d_k x d_model
+        self.k_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.v_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.output_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.RoPE = rope
+
+    def forward(self, x: torch.Tensor, token_positions=None) -> torch.Tensor:
+        # 先投影
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+
+        # 再拆头
+        q = rearrange(q, "... seq (heads d_k) -> ... heads seq d_k", heads = self.num_heads, d_k = self.d_k)
+        k = rearrange(k, "... seq (heads d_k) -> ... heads seq d_k", heads = self.num_heads, d_k = self.d_k)
+        v = rearrange(v, "... seq (heads d_k) -> ... heads seq d_k", heads = self.num_heads, d_k = self.d_k)
+
+        if self.RoPE is not None:
+            if token_positions is None:
+                token_positions = torch.arange(start=0, end=x.shape[-2], device=x.device)
+            q = self.RoPE(q, token_positions)
+            k = self.RoPE(k, token_positions)
+
+        # 构造因果mask
+        # 当 j <= i 时 mask[i][j] = True
+        causal_mask = torch.tril(torch.ones((x.shape[-2], x.shape[-2]), device=x.device, dtype=bool))
+
+        head = scaled_dot_product_attention(q, k, v, causal_mask)
+
+        multi_head = rearrange(head, "... heads seq d_v -> ... seq (heads d_v)", heads = self.num_heads, d_v = self.d_v)
+
+        return self.output_proj(multi_head)
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, rope=None, device=None, dtype=None):
+        super().__init__()
+        self.attn = MultiHeadSelfAttention(d_model, num_heads, rope=rope, device=device, dtype=dtype)
+        self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        self.ln1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.ln2 = RMSNorm(d_model, device=device, dtype=dtype)
+
+    def forward(self, x: torch.Tensor, token_positions=None) -> torch.Tensor:
+        y = x + self.attn(self.ln1(x), token_positions)
+        z = y + self.ffn(self.ln2(y))
+        return z
+
 if __name__ == "__main__":
-    swiglu = SwiGLU(d_model=8)
+    pass

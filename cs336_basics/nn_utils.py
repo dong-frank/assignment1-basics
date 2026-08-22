@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from einops import einsum, rearrange
+import math
 
 def softmax(x, dim):
     """对dim维做softmax"""
@@ -13,3 +14,12 @@ def softmax(x, dim):
 
 def silu(x):
     return x * torch.sigmoid(x)
+
+def scaled_dot_product_attention(Q, K, V, mask):
+    attention_score = einsum(Q, K, "... seq_q d_k, ... seq_k d_k -> ... seq_q seq_k")
+    attention_score = attention_score / math.sqrt(Q.shape[-1])
+
+    attention_score = torch.masked_fill(attention_score, ~mask, float("-inf"))
+    
+    softmax_attention_score = softmax(attention_score, -1)
+    return einsum(softmax_attention_score, V, "... seq_q seq_k, ... seq_k d_v -> ... seq_q d_v")
